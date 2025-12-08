@@ -102,6 +102,13 @@ where = ["src"]
 [tool.setuptools.package-dir]
 "" = "src"
 
+# Include non-Python files in the package (fonts, etc.)
+[tool.setuptools.package-data]
+einkpdf = [
+    "assets/fonts/*",
+    "assets/fonts/**/*",
+]
+
 # Black code formatting
 [tool.black]
 line-length = 88
