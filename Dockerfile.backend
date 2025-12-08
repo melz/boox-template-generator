@@ -1,3 +1,39 @@
+# ============================================
+# Stage 1: Builder - Install dependencies
+# ============================================
+FROM python:3.11-slim AS builder
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /build
+
+# Install build dependencies only in this stage
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy only files needed for package installation
+COPY pyproject.toml /build/
+COPY src /build/src
+
+# Install package into a virtual environment (keeps deps isolated)
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Install the package and its dependencies
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir .
+
+# Install additional runtime dependencies
+RUN pip install --no-cache-dir \
+    pydantic-settings \
+    sqlalchemy \
+    alembic
+
+# ============================================
+# Stage 2: Runtime - Minimal production image
+# ============================================
 FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -5,7 +41,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# Install system dependencies (added curl for health checks, sqlite3 for debugging, poppler-utils for PDF->PNG)
+# Install ONLY runtime system dependencies (no gcc, no build tools)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
@@ -13,20 +49,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     poppler-utils \
   && rm -rf /var/lib/apt/lists/*
 
-# Copy project files
-COPY pyproject.toml /app/
-COPY src /app/src
+# Copy virtual environment from builder stage
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Copy only runtime-required application files
 COPY backend /app/backend
 COPY config /app/config
-
-# Install project (library includes FastAPI/uvicorn in dependencies)
-RUN pip install --no-cache-dir .
-
-# Install additional dependencies for Phase 0
-RUN pip install --no-cache-dir \
-    pydantic-settings \
-    sqlalchemy \
-    alembic
 
 # Create data directory structure
 RUN mkdir -p /app/backend/data/assets /app/backend/data/jobs
