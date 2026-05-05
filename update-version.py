@@ -95,20 +95,16 @@ def main():
                 f'APP_VERSION={version}',
                 0
             ),
-            # Deterministic PDF metadata
+            # einkpdf package version (canonical Python source)
             (
-                root / "src/einkpdf/core/deterministic.py",
-                r'E-ink PDF Templates v[0-9.]+',
-                f'E-ink PDF Templates v{version}',
+                root / "src/einkpdf/_version.py",
+                r'__version__ = "[^"]*"',
+                f'__version__ = "{version}"',
                 0
             ),
-            # Renderer PDF metadata
-            (
-                root / "src/einkpdf/core/renderer.py",
-                r'E-ink PDF Templates v[0-9.]+',
-                f'E-ink PDF Templates v{version}',
-                0
-            ),
+            # NOTE: renderer.py and deterministic.py read the version from the
+            # einkpdf package (`from .. import __version__`), so no static
+            # rewrite is needed there. Add new dynamic readers the same way.
         ]
 
         modified_count = 0

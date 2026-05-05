@@ -153,27 +153,25 @@ class DeterministicPDFRenderer:
             
             # Set deterministic properties if requested
             if deterministic:
+                from .. import __version__
                 pdf_canvas.setTitle(self.template.metadata.name)
                 pdf_canvas.setSubject(self.template.metadata.description)
-                pdf_canvas.setCreator("E-ink PDF Templates v0.7.4")
+                pdf_canvas.setCreator(f"E-ink PDF Templates v{__version__}")
                 pdf_canvas.setAuthor(self.template.metadata.author or "Unknown")
                 # Note: ReportLab Canvas doesn't support setCreationDate directly
                 # Creation date will be handled by pikepdf post-processor for deterministic builds
             
             # Pre-pass: collect all anchor destination IDs available in template
-            try:
-                self._available_dest_ids = set()
-                for w in getattr(self.template, 'widgets', []) or []:
-                    try:
-                        if getattr(w, 'type', None) == 'anchor':
-                            props = getattr(w, 'properties', {}) or {}
-                            did = props.get('dest_id') if isinstance(props, dict) else None
-                            if isinstance(did, str) and did.strip():
-                                self._available_dest_ids.add(did.strip())
-                    except Exception:
-                        continue
-            except Exception:
-                self._available_dest_ids = set()
+            self._available_dest_ids = set()
+            for w in getattr(self.template, 'widgets', []) or []:
+                if getattr(w, 'type', None) != 'anchor':
+                    continue
+                props = getattr(w, 'properties', None)
+                if not isinstance(props, dict):
+                    continue
+                did = props.get('dest_id')
+                if isinstance(did, str) and did.strip():
+                    self._available_dest_ids.add(did.strip())
 
             # Pass 2: Layout pass - render content and collect anchor positions
             self._layout_pass(pdf_canvas)
@@ -232,15 +230,12 @@ class DeterministicPDFRenderer:
         self._total_pages = max_page
 
         # Build page->master map from optional page assignments
-        try:
-            assignments = getattr(self.template, 'page_assignments', []) or []
-            for pa in assignments:
-                page_no = getattr(pa, 'page', None)
-                master_id = getattr(pa, 'master_id', None)
-                if isinstance(page_no, int) and master_id:
-                    self._page_master_map[page_no] = master_id
-        except Exception:
-            self._page_master_map = {}
+        assignments = getattr(self.template, 'page_assignments', None) or []
+        for pa in assignments:
+            page_no = getattr(pa, 'page', None)
+            master_id = getattr(pa, 'master_id', None)
+            if isinstance(page_no, int) and master_id:
+                self._page_master_map[page_no] = master_id
         
         # Render each page (ensuring all pages are created, even if empty)
         for page_num in range(1, max_page + 1):
@@ -254,11 +249,14 @@ class DeterministicPDFRenderer:
             default_page_bookmark = f"Page{page_num}"
             if default_page_bookmark != page_bookmark_name:
                 pdf_canvas.bookmarkPage(default_page_bookmark)
-            try:
-                if hasattr(pdf_canvas, 'addNamedDestination'):
+            if hasattr(pdf_canvas, 'addNamedDestination'):
+                try:
                     pdf_canvas.addNamedDestination(default_page_bookmark)
-            except Exception:
-                pass
+                except Exception:
+                    logger.warning(
+                        "Failed to add named destination '%s' on page %d",
+                        default_page_bookmark, page_num, exc_info=True
+                    )
             
             # Get widgets for this page (may be empty)
             widgets = widgets_by_page.get(page_num, [])
@@ -290,21 +288,13 @@ class DeterministicPDFRenderer:
         """
         max_page = 1
         if widgets_by_page:
-            try:
-                max_page = max(max_page, max(widgets_by_page.keys()))
-            except ValueError:
-                pass
+            max_page = max(max_page, max(widgets_by_page.keys()))
 
         # Include pages that have master assignments even if they have no widgets
-        try:
-            assignments = getattr(self.template, 'page_assignments', []) or []
-            if assignments:
-                assign_max = max(getattr(pa, 'page', 1) for pa in assignments if hasattr(pa, 'page'))
-                max_page = max(max_page, assign_max)
-        except Exception:
-            pass
-
-        # Named destinations removed; no additional pages from navigation
+        assignments = getattr(self.template, 'page_assignments', None) or []
+        assignment_pages = [getattr(pa, 'page', 1) for pa in assignments if hasattr(pa, 'page')]
+        if assignment_pages:
+            max_page = max(max_page, max(assignment_pages))
 
         return max_page
     

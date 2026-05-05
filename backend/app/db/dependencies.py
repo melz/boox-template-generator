@@ -4,6 +4,7 @@ FastAPI dependencies for database services.
 Provides dependency injection for auth services, database sessions, etc.
 """
 
+import logging
 from typing import Generator, Optional
 
 from fastapi import Depends, HTTPException, Request, status
@@ -20,6 +21,8 @@ from .models import User
 from . import get_db
 from ..config import settings
 from ..models import TokenPayload
+
+logger = logging.getLogger(__name__)
 
 # OAuth2 scheme for token extraction
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
@@ -97,26 +100,22 @@ def get_current_user(
             detail="Account is inactive"
         )
 
-    # Check for admin impersonation
-    import logging
-    logger = logging.getLogger(__name__)
-
+    # Check for admin impersonation. Only admins may impersonate; the cookie
+    # carries "{admin_id}|{impersonated_user_id}" and only takes effect when the
+    # JWT-authenticated user is that admin.
     impersonate_cookie = request.cookies.get("admin_impersonate")
-    logger.info(f"Checking impersonation for user {user.username} (is_admin={user.is_admin}), cookie={impersonate_cookie}")
-
     if impersonate_cookie and user.is_admin:
         try:
             admin_id, impersonated_user_id = impersonate_cookie.split("|")
-            logger.info(f"Impersonation cookie parsed: admin_id={admin_id}, impersonated_user_id={impersonated_user_id}, current_user_id={user.id}")
             if admin_id == user.id:
-                # Admin is impersonating, return the impersonated user
                 impersonated_user = auth_service.get_user_by_id(impersonated_user_id)
-                logger.info(f"Admin {user.username} impersonating {impersonated_user.username}")
+                logger.info(
+                    "Admin '%s' impersonating user '%s'",
+                    user.username, impersonated_user.username
+                )
                 return impersonated_user
         except (ValueError, UserNotFoundError) as e:
-            # Invalid impersonation cookie, ignore it
-            logger.warning(f"Invalid impersonation cookie: {e}")
-            pass
+            logger.warning("Invalid impersonation cookie: %s", e)
 
     return user
 

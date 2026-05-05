@@ -8,6 +8,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
+from ..config import settings
 from ..db import get_db
 from ..db.dependencies import get_auth_service, get_current_user, get_password_reset_service
 from ..db.auth_service import (
@@ -20,6 +21,7 @@ from ..db.auth_service import (
 from ..db.jwt_service import get_jwt_service
 from ..db.models import User
 from ..auth import EmailService
+from ..limiter import limiter
 import os
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from ..models import (
@@ -65,7 +67,9 @@ def _to_user_response(user: User) -> UserResponse:
 
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+@limiter.limit(settings.REGISTER_RATE_LIMIT)
 async def register(
+    request: Request,
     payload: UserCreate,
     auth_service: DBAuthService = Depends(get_auth_service)
 ) -> UserResponse:
@@ -85,7 +89,9 @@ async def register(
 
 
 @router.post("/login", response_model=Token)
+@limiter.limit(settings.LOGIN_RATE_LIMIT)
 async def login(
+    request: Request,
     payload: UserLogin,
     auth_service: DBAuthService = Depends(get_auth_service)
 ) -> Token:
@@ -127,7 +133,9 @@ async def me(request: Request, current_user: User = Depends(get_current_user)) -
     response_model=MessageResponse,
     status_code=status.HTTP_202_ACCEPTED,
 )
+@limiter.limit(settings.PASSWORD_RESET_REQUEST_RATE_LIMIT)
 async def request_password_reset(
+    request: Request,
     payload: PasswordResetRequest,
     reset_service: DBPasswordResetService = Depends(get_password_reset_service)
 ) -> MessageResponse:
@@ -169,7 +177,9 @@ async def request_password_reset(
     response_model=MessageResponse,
     status_code=status.HTTP_200_OK,
 )
+@limiter.limit(settings.PASSWORD_RESET_CONFIRM_RATE_LIMIT)
 async def confirm_password_reset(
+    request: Request,
     payload: PasswordResetConfirmRequest,
     reset_service: DBPasswordResetService = Depends(get_password_reset_service)
 ) -> MessageResponse:

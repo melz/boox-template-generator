@@ -7,11 +7,16 @@ Follows CLAUDE.md coding standards - no dummy implementations.
 """
 
 import logging
+import os
 from pathlib import Path
 from fastapi import FastAPI, WebSocket, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
+from .config import settings
+from .limiter import limiter, rate_limit_exceeded_handler
 from .models import HealthResponse, APIError
 from .api import templates, pdf, profiles, compile as compile_api, projects, assets
 from .api import public as public_api
@@ -19,7 +24,6 @@ from .api import auth_db  # Database-backed authentication
 from .api import pdf_jobs  # Async PDF job generation
 from .api import admin  # Admin endpoints
 from .core_services import TemplateService
-import os
 from .websockets import handle_websocket_connection
 
 # Configure logging
@@ -29,19 +33,26 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Initialize FastAPI app
+# Initialize FastAPI app. Docs are exposed only when DEBUG is on.
 app = FastAPI(
     title="E-ink PDF Templates API",
     description="REST API for creating interactive PDF templates optimized for e-ink devices",
-    version="1.0.0",
-    docs_url="/docs",
-    redoc_url="/redoc"
+    version=settings.APP_VERSION,
+    docs_url="/docs" if settings.DEBUG else None,
+    redoc_url="/redoc" if settings.DEBUG else None,
+    openapi_url="/openapi.json" if settings.DEBUG else None,
 )
 
-# Configure CORS
+# Per-IP rate limiting. Limits are tuned in `settings`; flip
+# RATE_LIMIT_ENABLED off to bypass without touching decorators.
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
+
+# Configure CORS — driven by settings so prod can override via CORS_ORIGINS env.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],  # React dev server
+    allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["*"],
@@ -189,6 +200,16 @@ if __name__ == "__main__":
         reload=True,
         log_level="info"
     )
+@app.on_event("startup")
+async def assert_safe_config_on_startup() -> None:
+    """Refuse to serve traffic with insecure defaults.
+
+    Runs before the cleanup hook so we crash early if the deployment is
+    misconfigured. Prod sets JWT_SECRET_KEY via env; dev keeps DEBUG=True.
+    """
+    settings.assert_production_safe()
+
+
 @app.on_event("startup")
 async def run_cleanup_on_startup() -> None:
     """Lightweight storage cleanup at service start.

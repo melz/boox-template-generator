@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "einkpdf"
-version = "0.7.4"
+version = "0.7.5"
 description = "Interactive PDF template system optimized for Boox Onyx e-readers"
 readme = "README.md"
 license = "AGPL-3.0-or-later"
@@ -44,6 +44,7 @@ dependencies = [
     # Web API (Phase 4)
     "fastapi==0.108.0",              # Web API framework
     "uvicorn[standard]==0.25.0",     # ASGI server
+    "slowapi==0.1.9",                # Per-IP rate limiting for FastAPI
     
     # CLI interface
     "click==8.1.7",                  # Command-line interface

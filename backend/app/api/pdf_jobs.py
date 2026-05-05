@@ -8,14 +8,16 @@ Follows CLAUDE.md coding standards - no dummy implementations.
 import json
 import logging
 from typing import Any, Dict, List, Optional
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from ..config import settings
 from ..db import get_db
 from ..db.dependencies import get_current_user
 from ..db.models import PDFJob, User
+from ..limiter import limiter
 from ..services.pdf_job_service import (
     PDFJobService,
     PDFJobServiceError,
@@ -86,8 +88,10 @@ def _job_to_response(job: PDFJob) -> PDFJobResponse:
 # API Endpoints
 
 @router.post("", response_model=PDFJobResponse, status_code=status.HTTP_201_CREATED)
+@limiter.limit(settings.PDF_GENERATE_RATE_LIMIT)
 async def create_pdf_job(
-    request: PDFJobCreateRequest,
+    request: Request,
+    payload: PDFJobCreateRequest,
     background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
@@ -97,20 +101,11 @@ async def create_pdf_job(
 
     The job is processed asynchronously in the background.
     Returns immediately with job ID and pending status.
-
-    Args:
-        request: PDF generation request
-        background_tasks: FastAPI background tasks
-        current_user: Authenticated user
-        db: Database session
-
-    Returns:
-        Created job with pending status
     """
     try:
         job_service = PDFJobService(db)
 
-        if request.project_id is None and request.yaml_content is None:
+        if payload.project_id is None and payload.yaml_content is None:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Provide either project_id or yaml_content to create a PDF job",
@@ -119,7 +114,7 @@ async def create_pdf_job(
         # Create job record
         job = job_service.create_job(
             owner_id=current_user.id,
-            project_id=request.project_id
+            project_id=payload.project_id
         )
 
         logger.info(f"Created PDF job {job.id} for user {current_user.username}")
@@ -130,11 +125,11 @@ async def create_pdf_job(
             worker.process_job,
             job_id=job.id,
             owner_id=current_user.id,
-            project_id=request.project_id,
-            yaml_content=request.yaml_content,
-            profile=request.profile,
-            deterministic=request.deterministic,
-            strict_mode=request.strict_mode
+            project_id=payload.project_id,
+            yaml_content=payload.yaml_content,
+            profile=payload.profile,
+            deterministic=payload.deterministic,
+            strict_mode=payload.strict_mode
         )
 
         return _job_to_response(job)

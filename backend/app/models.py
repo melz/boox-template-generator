@@ -28,7 +28,7 @@ class UserCreate(BaseModel):
 class UserLogin(BaseModel):
     """Payload for authenticating an existing user."""
 
-    username: str = Field(..., min_length=3, max_length=50, description="Account username")
+    username: str = Field(..., min_length=3, max_length=255, description="Account username or email address")
     password: str = Field(..., min_length=8, max_length=64, description="Account password (max 64 characters to ensure UTF-8 compatibility)")
 
 

@@ -151,19 +151,41 @@ class DBAuthService:
 
         return user
 
-    def authenticate_user(self, username: str, password: str) -> User:
-        """Authenticate user with username and password."""
-        user = self.get_user_by_username(username)
+    def authenticate_user(self, identifier: str, password: str) -> User:
+        """
+        Authenticate user with username or email and password.
+
+        Args:
+            identifier: Username or email address
+            password: User's password
+
+        Returns:
+            Authenticated User object
+
+        Raises:
+            InvalidCredentialsError: If credentials are invalid
+            UserInactiveError: If user account is inactive
+        """
+        # Try username first, then email
+        user = self.get_user_by_username(identifier)
+        if user is None:
+            user = self.get_user_by_email(identifier)
 
         if user is None:
+            # Don't log the submitted identifier — users sometimes paste their
+            # password into the username field, and we must not capture it.
+            logger.info("Login failed: unknown identifier")
             raise InvalidCredentialsError("Invalid username or password")
 
         if not user.is_active:
-            raise UserInactiveError(f"User {username} is inactive")
+            logger.info("Login failed: inactive user '%s'", user.username)
+            raise UserInactiveError(f"User {user.username} is inactive")
 
         if not self.verify_password(password, user.password_hash):
+            logger.info("Login failed: invalid password for user '%s'", user.username)
             raise InvalidCredentialsError("Invalid username or password")
 
+        logger.info("Login successful for user '%s'", user.username)
         return user
 
     def update_user_password(self, user_id: str, new_password: str) -> None:

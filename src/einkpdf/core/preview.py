@@ -224,9 +224,8 @@ class GroundTruthPreviewer:
         cache_file = self.cache_dir / cache_key
         try:
             cache_file.write_bytes(png_bytes)
-        except Exception:
-            # Cache write failed, ignore
-            pass
+        except OSError as e:
+            logger.warning("Failed to write preview cache file %s: %s", cache_file, e)
     
     def clear_cache(self) -> None:
         """Clear all cached previews."""
@@ -236,8 +235,8 @@ class GroundTruthPreviewer:
         for cache_file in self.cache_dir.glob("preview_*.png"):
             try:
                 cache_file.unlink()
-            except Exception:
-                pass
+            except OSError as e:
+                logger.warning("Failed to remove preview cache file %s: %s", cache_file, e)
 
 
 def generate_ground_truth_preview(pdf_bytes: bytes,

@@ -28,14 +28,15 @@ const LoginForm = () => {
     <form onSubmit={handleSubmit(onSubmit)} className="space-y-5">
       <div className="space-y-1">
         <label htmlFor="username" className="block text-sm font-medium text-eink-black">
-          Username
+          Username or email
         </label>
         <input
           id="username"
           type="text"
           autoComplete="username"
+          placeholder="Enter your username or email"
           className="w-full rounded-md border border-eink-pale-gray px-3 py-2 text-sm focus:border-eink-black focus:outline-none focus:ring-0"
-          {...register('username', { required: 'Username is required' })}
+          {...register('username', { required: 'Username or email is required' })}
         />
         {errors.username ? (
           <p className="text-xs text-red-600">{errors.username.message}</p>

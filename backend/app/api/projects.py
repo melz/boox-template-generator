@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
 
 # Ensure src is on path
@@ -23,8 +23,10 @@ from einkpdf.services.compilation_service import CompilationService, Compilation
 from einkpdf.services.project_service import ProjectService, ProjectServiceError
 from einkpdf.services.png_export_service import PNGExportService, PNGExportError
 
+from ..config import settings
 from ..db.dependencies import get_current_user
 from ..db.models import User
+from ..limiter import limiter
 from ..models import CloneProjectRequest, MakeProjectPublicRequest
 from ..core_services import PDFService
 from ..utils import convert_enums_for_serialization
@@ -120,18 +122,20 @@ def _clean_author(request_author: str, current_user: User) -> str:
 
 
 @router.post("", response_model=Project, status_code=status.HTTP_201_CREATED)
+@limiter.limit(settings.PROJECT_CREATE_RATE_LIMIT)
 async def create_project(
-    request: CreateProjectRequest,
+    request: Request,
+    payload: CreateProjectRequest,
     current_user: User = Depends(get_current_user),
 ) -> Project:
     service = _get_user_project_service(current_user)
     try:
         project = service.create_project(
-            name=request.name,
-            description=request.description,
-            device_profile=request.device_profile,
-            author=_clean_author(request.author, current_user),
-            category=request.category,
+            name=payload.name,
+            description=payload.description,
+            device_profile=payload.device_profile,
+            author=_clean_author(payload.author, current_user),
+            category=payload.category,
         )
     except ProjectServiceError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc

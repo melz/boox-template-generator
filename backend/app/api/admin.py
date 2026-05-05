@@ -108,7 +108,7 @@ def list_users(
                 is_admin=user.is_admin,
                 created_at=user.created_at,
                 project_count=project_count,
-                last_login=None  # TODO: Add last_login tracking if needed
+                last_login=None
             )
         )
 

@@ -82,12 +82,13 @@ class DeterministicProcessor:
         if "/Info" not in pdf.Root:
             pdf.Root.Info = pdf.make_indirect({})
             
+        from .. import __version__
         info = pdf.Root.Info
         info["/Title"] = self.template.metadata.name
-        info["/Subject"] = self.template.metadata.description  
+        info["/Subject"] = self.template.metadata.description
         info["/Author"] = self.template.metadata.author or "E-ink PDF Templates"
-        info["/Creator"] = "E-ink PDF Templates v0.7.4"
-        info["/Producer"] = "E-ink PDF Templates v0.7.4"
+        info["/Creator"] = f"E-ink PDF Templates v{__version__}"
+        info["/Producer"] = f"E-ink PDF Templates v{__version__}"
         info["/CreationDate"] = timestamp_str
         info["/ModDate"] = timestamp_str
     
