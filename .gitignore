@@ -41,6 +41,7 @@ planning/
 CLAUDE.md
 .DS_Store
 Thumbs.db
+.claude
 
 # Tests/coverage
 .pytest_cache/
