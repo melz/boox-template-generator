@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 from einkpdf.core.project_schema import Project
 from einkpdf.services.project_service import ProjectService, ProjectServiceError
 
-from .auth import UserRecord
+from .db.models import User
 from .models import PublicProjectListResponse, PublicProjectResponse
 
 logger = logging.getLogger(__name__)
@@ -283,12 +283,25 @@ class PublicProjectManager:
     def publish_project(
         self,
         *,
-        owner: UserRecord,
+        owner: User,
         project: Project,
         source_dir: Path,
         desired_slug: Optional[str] = None,
     ) -> PublicProjectResponse:
-        slug = self._normalize_slug(desired_slug, project.metadata.name)
+        # If the user typed something for desired_slug, normalization MUST produce
+        # a usable slug. Silently accepting "@@@" -> None used to leave the project
+        # accessible only by ID, which is surprising. When desired_slug is None the
+        # caller didn't request a slug and a None fallback is fine.
+        if desired_slug is not None and desired_slug.strip():
+            normalized = self._normalize_slug(desired_slug, project.metadata.name)
+            if normalized is None:
+                raise WorkspaceError(
+                    f"Slug '{desired_slug}' contains no usable characters; "
+                    "use letters, digits, or hyphens."
+                )
+            slug = normalized
+        else:
+            slug = self._normalize_slug(None, project.metadata.name)
         with self._lock:
             if slug and self._slug_exists(slug, exclude_project_id=project.id):
                 raise WorkspaceError(f"Slug '{slug}' is already in use")
@@ -423,7 +436,7 @@ class PublicProjectManager:
     def clone_into_workspace(
         self,
         *,
-        target_user: UserRecord,
+        target_user: User,
         public_project: Project,
         public_directory: Path,
         workspace: UserWorkspaceManager,

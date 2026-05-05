@@ -361,6 +361,29 @@ const Canvas: React.FC<CanvasProps> = ({ readOnly = false }) => {
     const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
     const ctrlOrCmd = isMac ? event.metaKey : event.ctrlKey;
 
+    // Undo (Ctrl/Cmd + Z) and Redo (Ctrl/Cmd + Shift + Z, plus Ctrl + Y for
+    // Windows muscle memory). Both call into the editor store's history stack.
+    if (ctrlOrCmd && (event.key === 'z' || event.key === 'Z')) {
+      event.preventDefault();
+      const store = useEditorStore.getState() as any;
+      try {
+        if (event.shiftKey) store.redo();
+        else store.undo();
+      } catch (e) {
+        console.error('Undo/redo failed', e);
+      }
+      return;
+    }
+    if (ctrlOrCmd && !event.shiftKey && (event.key === 'y' || event.key === 'Y')) {
+      event.preventDefault();
+      try {
+        (useEditorStore.getState() as any).redo();
+      } catch (e) {
+        console.error('Redo failed', e);
+      }
+      return;
+    }
+
     // Copy
     if (ctrlOrCmd && (event.key === 'c' || event.key === 'C')) {
       event.preventDefault();

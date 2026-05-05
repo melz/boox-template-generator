@@ -137,6 +137,32 @@ class PlanSection(BaseModel):
                 raise ValueError("Date must be in YYYY-MM-DD format")
         return v
 
+    @validator("end_date")
+    def validate_end_after_start(cls, v, values):
+        """Reject sections where end_date precedes start_date.
+
+        Without this check, the date enumerator silently produces zero pages
+        and the user discovers a missing section only by counting output pages.
+        """
+        if v is None:
+            return v
+        start_date = values.get("start_date")
+        if start_date is None:
+            return v
+        try:
+            start = date.fromisoformat(start_date)
+            end = date.fromisoformat(v)
+        except ValueError:
+            # Format errors are surfaced by validate_date_format; skip the order check.
+            return v
+        if end < start:
+            kind = values.get("kind") or "section"
+            raise ValueError(
+                f"Section '{kind}' has end_date {v} before start_date {start_date}; "
+                f"swap them or fix the typo."
+            )
+        return v
+
     @validator("nested")
     def validate_nesting_depth(cls, v, values):
         """Prevent excessive nesting (max depth: 3)."""
@@ -301,6 +327,10 @@ class CompilationResult(BaseModel):
     template: Template = Field(..., description="Compiled template")
     compilation_stats: Dict[str, Any] = Field(..., description="Compilation statistics")
     generated_at: str = Field(..., description="Generation timestamp")
+    warnings: List[str] = Field(
+        default_factory=list,
+        description="Non-fatal diagnostics surfaced during compilation, e.g. variable references that never resolved.",
+    )
 
 
 class BindingContext(BaseModel):

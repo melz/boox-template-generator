@@ -5,13 +5,14 @@
  * Follows CLAUDE.md coding standards - no dummy implementations.
  */
 
-import React from 'react';
+import React, { useRef } from 'react';
 import { Settings, Type, Square, Minus, AlignJustify, Anchor, Trash2, Table } from 'lucide-react';
 import { Widget } from '@/types';
 import ColorPicker from './shared/ColorPicker';
 import NumberInput from './shared/NumberInput';
 import FontSelector from './shared/FontSelector';
 import SelectInput from './shared/SelectInput';
+import VariableQuickInsert from './shared/VariableQuickInsert';
 
 interface BasePropertyPanelProps {
   widget: Widget;
@@ -40,6 +41,7 @@ const BasePropertyPanel: React.FC<BasePropertyPanelProps> = ({
   children
 }) => {
   const Icon = getWidgetIcon(widget.type);
+  const contentTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   const updatePosition = (field: keyof Widget['position'], value: number) => {
     onUpdate({
@@ -176,11 +178,17 @@ const BasePropertyPanel: React.FC<BasePropertyPanelProps> = ({
               {widget.type === 'checkbox' ? 'Label' : 'Content'}
             </label>
             <textarea
+              ref={contentTextareaRef}
               value={widget.content || ''}
               onChange={(e) => onUpdate({ content: e.target.value })}
               placeholder={widget.type === 'checkbox' ? 'Enter checkbox label...' : 'Enter text content...'}
               rows={widget.type === 'checkbox' ? 1 : 3}
               className="w-full px-3 py-2 border border-eink-pale-gray rounded-md text-sm focus:outline-none focus:ring-1 focus:ring-eink-blue"
+            />
+            <VariableQuickInsert
+              inputRef={contentTextareaRef}
+              currentValue={widget.content || ''}
+              onChange={(value) => onUpdate({ content: value })}
             />
           </div>
         )}

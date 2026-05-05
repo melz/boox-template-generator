@@ -1,11 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   ArrowLeft, Save, Code, Layout, Grid, Download, Loader2, Maximize2,
   AlignLeft, AlignCenter, AlignRight,
   AlignStartVertical, AlignCenterVertical, AlignEndVertical,
   AlignHorizontalDistributeCenter, AlignVerticalDistributeCenter,
-  ArrowLeftRight, ArrowUpDown, Magnet
+  ArrowLeftRight, ArrowUpDown, Magnet, AlertTriangle, Info, Eye, EyeOff, Undo2, Redo2
 } from 'lucide-react';
 import { useEditorStore } from '@/stores/editorStore';
 import { Project, ProjectMaster, Template, Canvas, AddMasterRequest, UpdateMasterRequest, DeviceProfile, Widget } from '@/types';
@@ -13,6 +13,7 @@ import { APIClient } from '@/services/api';
 import { PublicAPI } from '@/services/public';
 import TemplateEditor from '@/components/TemplateEditor';
 import RescaleDialog from '@/components/editor/RescaleDialog';
+import { isMasterUsedByPlan, missingForMaster, planDefinedVariables } from '@/lib/variableStatus';
 
 interface MasterEditorProps {
   projectId?: string;
@@ -50,7 +51,7 @@ const MasterEditor: React.FC<MasterEditorProps> = ({
   const [deviceProfile, setDeviceProfile] = useState<DeviceProfile | null>(null);
 
   // Get editor state for alignment tools and grid/snap controls
-  const { selectedIds, alignSelected, distributeSelected, equalizeSizeSelected, snapEnabled, setSnapEnabled, setGridSize } = useEditorStore((state) => ({
+  const { selectedIds, alignSelected, distributeSelected, equalizeSizeSelected, snapEnabled, setSnapEnabled, setGridSize, samplePreview, setSamplePreview, canUndo, canRedo, undo, redo } = useEditorStore((state) => ({
     selectedIds: state.selectedIds,
     alignSelected: state.alignSelected,
     distributeSelected: state.distributeSelected,
@@ -58,10 +59,28 @@ const MasterEditor: React.FC<MasterEditorProps> = ({
     snapEnabled: state.snapEnabled,
     setSnapEnabled: state.setSnapEnabled,
     setGridSize: state.setGridSize,
+    samplePreview: state.samplePreview,
+    setSamplePreview: state.setSamplePreview,
+    canUndo: state._historyPast.length > 0,
+    canRedo: state._historyFuture.length > 0,
+    undo: state.undo,
+    redo: state.redo,
   }));
 
   // Check if there are unsaved changes
   const hasUnsavedChanges = !readOnly && yamlContent !== initialYamlContent;
+
+  // Variable status for the current master against the project's plan. Cached
+  // because used_variables is a backend computed_field — only refreshes after
+  // a successful save round-trip — so this is cheap to recompute on each render.
+  const variableHints = useMemo(() => {
+    if (!project || !currentMaster) return null;
+    const masterName = currentMaster.name;
+    const missing = missingForMaster(currentMaster, project.plan);
+    const usedByPlan = isMasterUsedByPlan(masterName, project.plan);
+    const planVars = planDefinedVariables(project.plan);
+    return { missing, usedByPlan, planVars };
+  }, [project, currentMaster]);
 
   // Default grid size: 10pt is standard for e-ink devices (balances precision vs usability)
   const DEFAULT_GRID_SIZE = 10;
@@ -629,6 +648,31 @@ const MasterEditor: React.FC<MasterEditorProps> = ({
             </button>
           </div>
 
+          {/* Undo / Redo — always visible. Stack lives in editorStore and
+              is also driven by Ctrl/Cmd+Z and Ctrl/Cmd+Shift+Z (or Ctrl+Y) in
+              the canvas keyboard handler. */}
+          {!readOnly && (
+            <>
+              <div className="w-px h-6 bg-eink-pale-gray" />
+              <button
+                onClick={() => undo()}
+                disabled={!canUndo}
+                className="p-2 rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed text-eink-gray hover:bg-eink-pale-gray"
+                title="Undo (Ctrl+Z)"
+              >
+                <Undo2 className="w-4 h-4" />
+              </button>
+              <button
+                onClick={() => redo()}
+                disabled={!canRedo}
+                className="p-2 rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed text-eink-gray hover:bg-eink-pale-gray"
+                title="Redo (Ctrl+Shift+Z / Ctrl+Y)"
+              >
+                <Redo2 className="w-4 h-4" />
+              </button>
+            </>
+          )}
+
           {/* Grid & Snap Controls - only in visual mode */}
           {viewMode === 'visual' && (
             <>
@@ -658,6 +702,21 @@ const MasterEditor: React.FC<MasterEditorProps> = ({
                 title={snapEnabled ? 'Disable Snapping' : 'Enable Snapping'}
               >
                 <Magnet className="w-4 h-4" />
+              </button>
+
+              {/* Sample Preview Toggle — substitutes {var} placeholders with
+                  fixed sample values (Wed Jan 15 2025) so the canvas shows
+                  what the rendered page will actually look like. */}
+              <button
+                onClick={() => setSamplePreview(!samplePreview)}
+                className={`p-2 rounded transition-colors ${
+                  samplePreview
+                    ? 'bg-eink-black text-white'
+                    : 'text-eink-gray hover:bg-eink-pale-gray'
+                }`}
+                title={samplePreview ? 'Show literal {var} placeholders' : 'Preview with sample data (Wed Jan 15 2025)'}
+              >
+                {samplePreview ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
               </button>
 
               {/* Grid Size Input */}
@@ -910,6 +969,42 @@ const MasterEditor: React.FC<MasterEditorProps> = ({
       {error && (
         <div className="m-4 p-4 bg-red-50 border border-red-200 rounded-lg">
           <p className="text-red-800 whitespace-pre-line">{error}</p>
+        </div>
+      )}
+
+      {/* Variable status banner. Surfaces issues the compile step would
+          otherwise reveal: typos / missing custom variables, and orphan masters
+          not referenced by any plan section. The hint shrinks once you've fixed
+          the issue — design assumes you'll save the master to refresh
+          used_variables (it's a backend computed_field). */}
+      {!readOnly && variableHints && variableHints.missing.length > 0 && (
+        <div className="m-4 p-3 bg-amber-50 border border-amber-200 rounded-lg flex items-start gap-2">
+          <AlertTriangle size={18} className="text-amber-700 mt-0.5 shrink-0" />
+          <div className="flex-1 text-sm">
+            <div className="font-medium text-amber-900">
+              {variableHints.missing.length} variable{variableHints.missing.length === 1 ? '' : 's'} this master uses won't be provided by any plan section
+            </div>
+            <div className="mt-1 text-amber-800">
+              Missing:{' '}
+              {variableHints.missing.map((v) => (
+                <code key={v} className="font-mono bg-amber-100 px-1 rounded mr-1">{`{${v}}`}</code>
+              ))}
+            </div>
+            <div className="mt-1 text-amber-700 text-xs">
+              {variableHints.planVars.length > 0
+                ? <>Plan defines: {variableHints.planVars.map((v) => <code key={v} className="font-mono mr-1">{`{${v}}`}</code>)}</>
+                : <>The plan doesn't define any custom counters/context yet — add them in the Plan tab or fix the typo here.</>
+              }
+            </div>
+          </div>
+        </div>
+      )}
+      {!readOnly && variableHints && variableHints.missing.length === 0 && !variableHints.usedByPlan && currentMaster && !isNewMaster && (
+        <div className="m-4 p-3 bg-blue-50 border border-blue-200 rounded-lg flex items-start gap-2">
+          <Info size={18} className="text-blue-700 mt-0.5 shrink-0" />
+          <div className="flex-1 text-sm text-blue-900">
+            This master isn't referenced by any plan section yet. Add a section to the plan that uses it, otherwise it won't appear in the compiled PDF.
+          </div>
         </div>
       )}
 

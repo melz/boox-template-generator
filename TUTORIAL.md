@@ -385,6 +385,16 @@ The system handles all the math automatically - you just use the `_prev` and `_n
 - December page: `{month_next}` is empty (last month in section)
   - Link destination `"month:{month_next}"` → **no link created** (skipped)
 
+**Year-boundary special case for `{week_prev}` / `{week_next}`:**
+
+Week navigation is also cleared at **year boundaries**, even when the adjacent week is semantically defined. The compiler intentionally avoids producing cross-year week links because the destination ID format (`week:{week}`) is ambiguous about which year a bare week number refers to.
+
+- January 1 (ISO week 1): `{week_prev}` is empty even when the previous year had a week 52 (or week 53).
+- December 31 (ISO week 52 or 53): `{week_next}` is empty even when the next year's week 1 exists.
+- Inside a single year, week navigation works normally (week 25 ↔ week 26, etc.).
+
+If you need cross-year week links, encode the year into the destination ID — e.g. use the link template `"week:{year}-W{week:02d}"` paired with anchors of the same form, and link explicitly to the previous year's last week from your year-end page.
+
 ### Format Specifier Syntax
 
 The `:02d` syntax controls how numbers are displayed:

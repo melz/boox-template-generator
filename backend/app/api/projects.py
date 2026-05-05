@@ -125,6 +125,7 @@ def _clean_author(request_author: str, current_user: User) -> str:
 @limiter.limit(settings.PROJECT_CREATE_RATE_LIMIT)
 async def create_project(
     request: Request,
+    response: Response,
     payload: CreateProjectRequest,
     current_user: User = Depends(get_current_user),
 ) -> Project:
@@ -415,7 +416,9 @@ async def compile_project(project_id: str, current_user: User = Depends(get_curr
         allow_unicode=True,
     )
 
-    warnings: List[str] = []
+    # Start with any compile-time warnings (e.g. unresolved {variable} references)
+    # so the user sees them in the editor's compile panel.
+    warnings: List[str] = list(result.warnings or [])
     compiled_dir = _project_dir(current_user, project_id) / "compiled"
     compiled_dir.mkdir(parents=True, exist_ok=True)
 
@@ -432,11 +435,12 @@ async def compile_project(project_id: str, current_user: User = Depends(get_curr
     (compiled_dir / "latest.yaml").write_text(template_yaml)
 
     try:
-        pdf_bytes, warnings = pdf_service.generate_pdf_with_warnings(
+        pdf_bytes, render_warnings = pdf_service.generate_pdf_with_warnings(
             yaml_content=template_yaml,
             profile=project.metadata.device_profile,
             deterministic=True,
         )
+        warnings.extend(render_warnings or [])
         tmp_path = compiled_dir / "latest.pdf.tmp"
         with open(tmp_path, "wb") as handle:
             handle.write(pdf_bytes)

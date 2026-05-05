@@ -38,6 +38,11 @@ planning/
 # Local env
 .env
 
+# Per-deployment compose override (paths, domain, SMTP host).
+# Copy docker-compose.override.yml.example to docker-compose.override.yml
+# and fill in the values for your host.
+docker-compose.override.yml
+
 CLAUDE.md
 .DS_Store
 Thumbs.db

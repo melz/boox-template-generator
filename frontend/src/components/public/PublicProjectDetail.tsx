@@ -25,6 +25,10 @@ const PublicProjectDetail = () => {
   const [isDialogOpen, setDialogOpen] = useState(false);
   const [cloneError, setCloneError] = useState<string | null>(null);
   const [previewError, setPreviewError] = useState(false);
+  // null = "still checking", true = "PDF is downloadable", false = "owner
+  // hasn't compiled yet, button disabled". Keeping it tristate avoids a
+  // brief flash of an enabled button before the HEAD response lands.
+  const [pdfAvailable, setPdfAvailable] = useState<boolean | null>(null);
 
   const identifier = slug ?? projectId ?? '';
 
@@ -53,6 +57,31 @@ const PublicProjectDetail = () => {
   useEffect(() => {
     void loadProject();
   }, [loadProject]);
+
+  // Probe the public PDF endpoint so we can disable the download button when
+  // the owner hasn't compiled yet. We use GET (not HEAD) because backend
+  // doesn't register HEAD on /pdf; range request keeps it cheap.
+  useEffect(() => {
+    if (!project) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const response = await fetch(`/api/public/projects/${project.id}/pdf`, {
+          method: 'GET',
+          headers: { Range: 'bytes=0-0' },
+        });
+        if (cancelled) return;
+        // 200 (full body) or 206 (range honoured) both mean the PDF exists.
+        // 404 is the documented "owner hasn't compiled yet" response.
+        setPdfAvailable(response.ok);
+      } catch {
+        if (!cancelled) setPdfAvailable(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [project?.id, project?.updated_at]);
 
   const handleClone = async (payload: { new_name: string; new_description?: string }) => {
     if (!project) {
@@ -212,11 +241,16 @@ const PublicProjectDetail = () => {
             <button
               type="button"
               onClick={handleDownloadPDF}
-              className="inline-flex items-center gap-2 rounded-md border border-eink-dark-gray bg-white px-4 py-2 text-sm font-semibold text-eink-black transition-colors hover:bg-eink-pale-gray"
-              title="Download PDF"
+              disabled={pdfAvailable === false}
+              className="inline-flex items-center gap-2 rounded-md border border-eink-dark-gray bg-white px-4 py-2 text-sm font-semibold text-eink-black transition-colors hover:bg-eink-pale-gray disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-white"
+              title={
+                pdfAvailable === false
+                  ? "PDF not available — the project owner hasn't compiled it yet."
+                  : 'Download PDF'
+              }
             >
               <Download className="h-4 w-4" />
-              Download PDF
+              {pdfAvailable === false ? 'PDF not yet available' : 'Download PDF'}
             </button>
           </div>
           <div className="text-xs text-eink-dark-gray">Share link: {shareLink}</div>
@@ -227,7 +261,7 @@ const PublicProjectDetail = () => {
       <div className="rounded-lg border border-eink-pale-gray bg-white p-6">
         <h2 className="mb-4 text-lg font-semibold text-eink-black">PDF Preview</h2>
         <div className="relative h-96 w-full overflow-hidden rounded-lg bg-eink-pale-gray">
-          {!previewError ? (
+          {pdfAvailable !== false && !previewError ? (
             <iframe
               src={pdfPreviewUrl}
               className="h-full w-full border-0"
@@ -238,7 +272,11 @@ const PublicProjectDetail = () => {
             <div className="flex h-full items-center justify-center">
               <div className="text-center">
                 <FileText className="mx-auto h-16 w-16 text-eink-dark-gray opacity-50" />
-                <p className="mt-2 text-sm text-eink-dark-gray">Preview unavailable</p>
+                <p className="mt-2 text-sm text-eink-dark-gray">
+                  {pdfAvailable === false
+                    ? "Preview unavailable — the owner hasn't compiled this project yet."
+                    : 'Preview unavailable'}
+                </p>
               </div>
             </div>
           )}
@@ -256,6 +294,7 @@ const PublicProjectDetail = () => {
 
       <CloneDialog
         isOpen={isDialogOpen}
+        sourceDeviceProfile={project.metadata.device_profile}
         initialName={`${project.metadata.name} copy`}
         initialDescription={project.metadata.description}
         error={cloneError}

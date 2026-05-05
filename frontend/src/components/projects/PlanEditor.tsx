@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -96,6 +96,10 @@ export const PlanEditor: React.FC<PlanEditorProps> = ({ project, onSave }) => {
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [initialPlanJson, setInitialPlanJson] = useState(JSON.stringify(project.plan));
   const [showVariables, setShowVariables] = useState(true);
+  // Auto-reopen the panel when missing variables appear so a user who collapsed
+  // it doesn't miss new errors. Only triggers on the 0 -> N transition; manual
+  // collapse is preserved as long as the missing count stays the same or shrinks.
+  const previousMissingCount = useRef(0);
 
   // Detect unsaved changes
   useEffect(() => {
@@ -270,6 +274,15 @@ export const PlanEditor: React.FC<PlanEditorProps> = ({ project, onSave }) => {
         AUTO_VARIABLES.has(varName) || WIDGET_LOCAL_VARIABLES.has(varName) || definedVariables.has(varName)
     };
   }, [project.masters, plan.sections]);
+
+  useEffect(() => {
+    const currentMissing = variableStatus.missingVariables.length;
+    if (currentMissing > previousMissingCount.current) {
+      // New missing variable appeared — make sure the panel is visible.
+      setShowVariables(true);
+    }
+    previousMissingCount.current = currentMissing;
+  }, [variableStatus.missingVariables.length]);
 
   const handleLocaleChange = (locale: string) => {
     setPlan({ ...plan, locale });

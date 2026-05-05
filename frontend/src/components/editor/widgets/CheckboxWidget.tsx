@@ -9,6 +9,8 @@ import React from 'react';
 import { Widget } from '@/types';
 import { getFontCSS } from '@/lib/fonts';
 import { mapJustify } from './utils';
+import { useEditorStore } from '@/stores/editorStore';
+import { replaceTokensForPreview } from '@/lib/tokens';
 
 interface CheckboxWidgetProps {
   widget: Widget;
@@ -22,6 +24,9 @@ const CheckboxWidget: React.FC<CheckboxWidgetProps> = ({ widget }) => {
   const fontCSS = getFontCSS(widget.styling?.font);
   const orientation = widget.properties?.orientation || 'horizontal';
   const textAlign = widget.styling?.text_align || 'left';
+  const samplePreview = useEditorStore((s) => s.samplePreview);
+  const rawLabel = widget.content || 'Checkbox';
+  const displayLabel = samplePreview ? replaceTokensForPreview(rawLabel) : rawLabel;
 
   // Determine rotation based on orientation
   const getRotationStyle = () => {
@@ -58,7 +63,7 @@ const CheckboxWidget: React.FC<CheckboxWidgetProps> = ({ widget }) => {
             color: widget.styling?.color || '#000000'
           }}
         >
-          {widget.content || 'Checkbox'}
+          {displayLabel}
         </span>
       </div>
     </div>

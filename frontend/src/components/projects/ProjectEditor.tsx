@@ -4,6 +4,7 @@ import { ArrowLeft, Plus, Download, RefreshCw, Edit2, Check, X, Eye, Trash2 } fr
 import { Project, Plan, DeviceProfile, Widget } from '@/types';
 import { useProjectStore } from '@/stores/projectStore';
 import { APIClient, downloadBlob } from '@/services/api';
+import { usePDFJobLifecycle } from '@/hooks/usePDFJobLifecycle';
 import PlanEditor from './PlanEditor';
 import PlanPreview from './PlanPreview';
 import CreateMasterModal from './CreateMasterModal';
@@ -54,43 +55,22 @@ const ProjectEditor: React.FC = () => {
   const [tempName, setTempName] = useState<string>('');
   const [editingDescription, setEditingDescription] = useState(false);
   const [tempDescription, setTempDescription] = useState<string>('');
-  const [creatingPDF, setCreatingPDF] = useState<boolean>(false);
-  const [jobInProgress, setJobInProgress] = useState<boolean>(false);
-  const [currentPDFJobId, setCurrentPDFJobId] = useState<string | null>(null);
-  // Keep job ID for localStorage persistence and debugging (not used for UI logic)
-  const [_completedPDFJobId, setCompletedPDFJobId] = useState<string | null>(null);
-  // Following CLAUDE.md Rule #3: Track ACTUAL PDF existence, not just job state
-  const [pdfExists, setPdfExists] = useState<boolean>(false);
 
-  const storageAvailable = typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
-  const getActiveJobKey = () => (projectId ? `einkpdf:pdfjob:active:${projectId}` : null);
-  const getCompletedJobKey = () => (projectId ? `einkpdf:pdfjob:completed:${projectId}` : null);
-
-  const persistValue = (key: string | null, value: string | null) => {
-    if (!key || !storageAvailable) return;
-    try {
-      if (value) {
-        window.localStorage.setItem(key, value);
-      } else {
-        window.localStorage.removeItem(key);
-      }
-    } catch (err) {
-      console.warn('Failed to persist PDF job state', err);
-    }
-  };
-
-  const readValue = (key: string | null): string | null => {
-    if (!key || !storageAvailable) return null;
-    try {
-      return window.localStorage.getItem(key);
-    } catch (err) {
-      console.warn('Failed to read PDF job state', err);
-      return null;
-    }
-  };
-
-  const persistActiveJob = (jobId: string | null) => persistValue(getActiveJobKey(), jobId);
-  const persistCompletedJob = (jobId: string | null) => persistValue(getCompletedJobKey(), jobId);
+  // PDF generation lifecycle (job tracking, localStorage persistence, pdfExists)
+  // lives in this hook; the editor only owns blob-URL UI state below.
+  const pdfLifecycle = usePDFJobLifecycle(projectId);
+  const {
+    creatingPDF,
+    jobInProgress,
+    currentPDFJobId,
+    pdfExists,
+    startJob,
+    handleJobCompleted,
+    handleJobErrored,
+    handleJobCancelled,
+    markPdfMissing,
+    refreshPDFExistence,
+  } = pdfLifecycle;
 
   // Helper function to create authenticated PDF preview URL
   const createPreviewUrl = async (projectId: string): Promise<string> => {
@@ -110,170 +90,7 @@ const ProjectEditor: React.FC = () => {
     setError(null);
 
     loadProject();
-
-    const initializeJobs = async () => {
-      const hasActive = await restoreActiveJobFromStorage();
-      if (hasActive) return;
-
-      const hasCompleted = await restoreCompletedJobFromStorage();
-      if (!hasCompleted) {
-        await checkForCompletedPDFJobs();
-      }
-    };
-
-    initializeJobs();
   }, [projectId]);
-
-  // Check for existing PDF jobs for this project (any status)
-  const checkForCompletedPDFJobs = async () => {
-    if (!projectId) return;
-
-    try {
-      // Check for all jobs (no status filter to get pending/processing/completed)
-      const response = await APIClient.listPDFJobs(undefined, 50, 0);
-
-      // Find most recent job for THIS project (jobs are sorted by created_at descending)
-      const mostRecentJob = response.jobs.find(job => job.project_id === projectId);
-
-      if (mostRecentJob) {
-        setCurrentPDFJobId(mostRecentJob.id);
-
-        if (mostRecentJob.status === 'pending' || mostRecentJob.status === 'processing') {
-          // Show ongoing job status
-          setJobInProgress(true);
-          setCompletedPDFJobId(null);
-          persistActiveJob(mostRecentJob.id);
-          persistCompletedJob(null);
-        } else if (mostRecentJob.status === 'completed') {
-          setJobInProgress(false);
-          setCompletedPDFJobId(mostRecentJob.id);
-          persistActiveJob(null);
-          persistCompletedJob(mostRecentJob.id);
-        } else {
-          // Failed or cancelled job
-          setJobInProgress(false);
-          setCompletedPDFJobId(null);
-          persistActiveJob(null);
-          persistCompletedJob(null);
-        }
-      } else {
-        setCurrentPDFJobId(null);
-        setJobInProgress(false);
-        persistActiveJob(null);
-        persistCompletedJob(null);
-      }
-    } catch (err) {
-      console.error('Failed to check for PDF jobs:', err);
-      // Non-fatal error, don't block UI
-    }
-  };
-
-  const restoreActiveJobFromStorage = async (): Promise<boolean> => {
-    if (!projectId) return false;
-
-    const storedJobId = readValue(getActiveJobKey());
-    if (!storedJobId) return false;
-
-    try {
-      const job = await APIClient.getPDFJob(storedJobId);
-      if (job.project_id && job.project_id !== projectId) {
-        // Job belongs to different project - clear it
-        persistActiveJob(null);
-        return false;
-      }
-
-      if (job.status === 'pending' || job.status === 'processing') {
-        setCurrentPDFJobId(job.id);
-        setCompletedPDFJobId(null);
-        setJobInProgress(true);
-        return true;
-      }
-
-      if (job.status === 'completed') {
-        setCurrentPDFJobId(job.id);
-        setCompletedPDFJobId(job.id);
-        setJobInProgress(false);
-        persistActiveJob(null);
-        persistCompletedJob(job.id);
-        return true;
-      }
-
-      // Job exists but has failed/cancelled status - clear it
-      persistActiveJob(null);
-    } catch (err: any) {
-      // Following CLAUDE.md Rule #3: Don't show errors for stale job state - PDF existence is what matters
-      // Only clear localStorage for permanent failures (404 = job doesn't exist)
-      const is404 = err.status === 404 ||
-                    err.response?.status === 404 ||
-                    err.message?.includes('404') ||
-                    err.message?.includes('Not Found');
-
-      if (is404) {
-        console.warn('Active PDF job not found (404), clearing storage:', storedJobId);
-        persistActiveJob(null);
-      } else {
-        // Likely stale job from previous session - clear it to avoid repeated errors
-        console.warn('Failed to restore active PDF job (clearing stale localStorage):', err);
-        persistActiveJob(null);
-      }
-    }
-
-    return false;
-  };
-
-  const restoreCompletedJobFromStorage = async (): Promise<boolean> => {
-    if (!projectId) return false;
-
-    const storedJobId = readValue(getCompletedJobKey());
-    if (!storedJobId) return false;
-
-    try {
-      const job = await APIClient.getPDFJob(storedJobId);
-      if (job.project_id && job.project_id !== projectId) {
-        // Job belongs to different project - clear it
-        persistCompletedJob(null);
-        return false;
-      }
-
-      if (job.status === 'completed') {
-        setCurrentPDFJobId(job.id);
-        setCompletedPDFJobId(job.id);
-        setJobInProgress(false);
-        return true;
-      }
-
-      if (job.status === 'pending' || job.status === 'processing') {
-        // Job status changed from completed to in-progress (rare edge case)
-        persistCompletedJob(null);
-        persistActiveJob(job.id);
-        setCurrentPDFJobId(job.id);
-        setCompletedPDFJobId(null);
-        setJobInProgress(true);
-        return true;
-      }
-
-      // Job exists but has failed/cancelled status - clear it
-      persistCompletedJob(null);
-    } catch (err: any) {
-      // Following CLAUDE.md Rule #3: Don't show errors for stale job state - PDF existence is what matters
-      // Only clear localStorage for permanent failures (404 = job doesn't exist)
-      const is404 = err.status === 404 ||
-                    err.response?.status === 404 ||
-                    err.message?.includes('404') ||
-                    err.message?.includes('Not Found');
-
-      if (is404) {
-        console.warn('Completed PDF job not found (404), clearing storage:', storedJobId);
-        persistCompletedJob(null);
-      } else {
-        // Likely stale job from previous session - clear it to avoid repeated errors
-        console.warn('Failed to restore completed PDF job (clearing stale localStorage):', err);
-        persistCompletedJob(null);
-      }
-    }
-
-    return false;
-  };
 
   useEffect(() => {
     // Handle tab parameter from URL and reload project data
@@ -304,43 +121,33 @@ const ProjectEditor: React.FC = () => {
     loadProfiles();
   }, []);
 
-  // If a compiled PDF already exists when loading the project, show it automatically
-  // Following CLAUDE.md Rule #3: Check ACTUAL file existence, not just job records
+  // Re-check whether a PDF exists when the user lands on the preview tab —
+  // catches the case where the PDF was deleted server-side between visits.
+  // The hook does the same check on mount, so we only need it on tab change.
   useEffect(() => {
-    const checkExistingPDF = async () => {
-      if (!project) return;
-      const exists = await APIClient.hasCompiledPDF(project.id);
-      setPdfExists(exists); // Track actual PDF existence
-      if (exists) {
-        try {
-          const url = await createPreviewUrl(project.id);
-          setPreviewUrl(url);
-        } catch (err) {
-          console.error('Failed to load existing PDF preview:', err);
-        }
-        // Do not auto-switch tabs; respect user's current tab selection
-      }
-    };
-    checkExistingPDF();
-  }, [project]);
+    if (activeTab === 'preview' && project) {
+      refreshPDFExistence();
+    }
+  }, [activeTab, project, refreshPDFExistence]);
 
-  // When switching to Preview tab, auto-load existing PDF if available
+  // Once we know a PDF exists for this project, fetch and display it.
+  // Triggers on initial mount, after a job completes (pdfExists flips), and
+  // after refreshPDFExistence detects a still-present PDF.
   useEffect(() => {
-    const maybeLoad = async () => {
-      if (activeTab !== 'preview' || !project) return;
-      const exists = await APIClient.hasCompiledPDF(project.id);
-      setPdfExists(exists); // Track actual PDF existence
-      if (exists) {
-        try {
-          const url = await createPreviewUrl(project.id);
-          setPreviewUrl(url);
-        } catch (err) {
-          console.error('Failed to load preview when switching tabs:', err);
-        }
+    if (!project || !pdfExists) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const url = await createPreviewUrl(project.id);
+        if (!cancelled) setPreviewUrl(url);
+      } catch (err) {
+        console.error('Failed to load PDF preview:', err);
       }
+    })();
+    return () => {
+      cancelled = true;
     };
-    maybeLoad();
-  }, [activeTab, project]);
+  }, [project, pdfExists]);
 
   // Cleanup blob URLs when component unmounts to prevent memory leaks
   useEffect(() => {
@@ -383,39 +190,11 @@ const ProjectEditor: React.FC = () => {
 
   const handleCreatePDF = async () => {
     if (!project) return;
-
     setError(null);
-    setCreatingPDF(true);
-    setJobInProgress(true);
-
-    // IMPORTANT: Clear old job first to force component remount
-    setCurrentPDFJobId(null);
-    setCompletedPDFJobId(null);
-    // Don't clear pdfExists yet - old PDF still exists until new one replaces it
-    persistCompletedJob(null);
-
     try {
-      const job = await APIClient.createPDFJob({
-        project_id: project.id,
-        deterministic: false,
-        strict_mode: false,
-      });
-
-      console.log('[ProjectEditor] Created new job:', job.id);
-
-      // Show job status component with NEW job ID
-      setCurrentPDFJobId(job.id);
-      persistActiveJob(job.id);
-
-      console.log('[ProjectEditor] State updated, currentPDFJobId should be:', job.id);
+      await startJob();
     } catch (err: any) {
       setError(err.message || 'Failed to create PDF job');
-      persistActiveJob(null);
-      setJobInProgress(false);
-      setCurrentPDFJobId(null);
-    }
-    finally {
-      setCreatingPDF(false);
     }
   };
 
@@ -449,7 +228,7 @@ const ProjectEditor: React.FC = () => {
 
       if (is404) {
         setError('PDF not found. It may have been deleted.');
-        setPdfExists(false);
+        markPdfMissing();
       } else {
         setError(err.message || 'Failed to open PDF. Please try again.');
       }
@@ -465,10 +244,9 @@ const ProjectEditor: React.FC = () => {
 
     // Verify PDF actually exists before attempting download
     try {
-      const exists = await APIClient.hasCompiledPDF(project.id);
+      const exists = await refreshPDFExistence();
       if (!exists) {
         setError('PDF not found. It may have been deleted.');
-        setPdfExists(false);
         return;
       }
     } catch (err: any) {
@@ -491,9 +269,7 @@ const ProjectEditor: React.FC = () => {
 
       if (is404) {
         setError('PDF not found. It may have been deleted or expired.');
-        setPdfExists(false);
-        persistCompletedJob(null);
-        setCompletedPDFJobId(null);
+        markPdfMissing();
       } else {
         // Following CLAUDE.md Rule #3: Explicit error with fallback suggestion
         setError('Download failed. Try "Open PDF" button or use browser\'s download feature.');
@@ -1408,41 +1184,16 @@ const ProjectEditor: React.FC = () => {
             </div>
           </div>
 
-          {/* PDF Job Status */}
+          {/* PDF Job Status — completion flips pdfExists; the preview-loading
+              effect picks that up and refreshes the iframe blob URL. */}
           {currentPDFJobId && (
             <div className="mb-6">
               <PDFJobStatusComponent
                 jobId={currentPDFJobId}
                 autoDownload={false}
-                onComplete={async (job) => {
-                  console.log('[ProjectEditor] Job completed:', job.id);
-                  setCompletedPDFJobId(job.id);
-                  setCurrentPDFJobId(job.id);
-                  setJobInProgress(false);
-                  setPdfExists(true); // PDF now exists on disk
-                  persistActiveJob(null);
-                  persistCompletedJob(job.id);
-
-                  // Auto-refresh preview
-                  if (project) {
-                    try {
-                      const url = await createPreviewUrl(project.id);
-                      setPreviewUrl(url);
-                    } catch (err) {
-                      console.error('Failed to auto-refresh preview:', err);
-                    }
-                  }
-                }}
-                onError={() => {
-                  setJobInProgress(false);
-                  persistActiveJob(null);
-                  persistCompletedJob(null);
-                }}
-                onCancel={() => {
-                  setJobInProgress(false);
-                  persistActiveJob(null);
-                  persistCompletedJob(null);
-                }}
+                onComplete={handleJobCompleted}
+                onError={handleJobErrored}
+                onCancel={handleJobCancelled}
               />
             </div>
           )}

@@ -4,8 +4,10 @@ FastAPI dependencies for database services.
 Provides dependency injection for auth services, database sessions, etc.
 """
 
+import hashlib
+import hmac
 import logging
-from typing import Generator, Optional
+from typing import Generator, Optional, Tuple
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordBearer
@@ -26,6 +28,56 @@ logger = logging.getLogger(__name__)
 
 # OAuth2 scheme for token extraction
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
+
+
+# ---- Admin impersonation cookie ----
+#
+# The cookie carries `{admin_id}|{user_id}|{hmac_hex}` where the HMAC is over
+# `{admin_id}|{user_id}` keyed with JWT_SECRET_KEY. Without the signature an
+# XSS payload could read the JWT and forge an impersonation cookie naming any
+# user as the target. With it, the attacker also needs the secret.
+
+IMPERSONATE_COOKIE_NAME = "admin_impersonate"
+
+
+def sign_impersonation_cookie(admin_id: str, user_id: str) -> str:
+    """Produce the cookie value `{admin_id}|{user_id}|{hmac_hex}`.
+
+    User IDs are 32-char hex tokens (no `|`), so the format is unambiguous.
+    """
+    payload = f"{admin_id}|{user_id}"
+    sig = hmac.new(
+        settings.JWT_SECRET_KEY.encode("utf-8"),
+        payload.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    return f"{payload}|{sig}"
+
+
+def verify_impersonation_cookie(cookie_value: str) -> Optional[Tuple[str, str]]:
+    """Return `(admin_id, user_id)` if the cookie is well-formed and signed.
+
+    Returns None on any malformedness or signature mismatch — callers must
+    treat that as "no impersonation in effect".
+    """
+    parts = cookie_value.rsplit("|", 1)
+    if len(parts) != 2:
+        return None
+    payload, given_sig = parts
+    expected_sig = hmac.new(
+        settings.JWT_SECRET_KEY.encode("utf-8"),
+        payload.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    if not hmac.compare_digest(given_sig, expected_sig):
+        return None
+    payload_parts = payload.split("|")
+    if len(payload_parts) != 2:
+        return None
+    admin_id, user_id = payload_parts
+    if not admin_id or not user_id:
+        return None
+    return admin_id, user_id
 
 
 def get_auth_service(db: Session = Depends(get_db)) -> DBAuthService:
@@ -100,22 +152,30 @@ def get_current_user(
             detail="Account is inactive"
         )
 
-    # Check for admin impersonation. Only admins may impersonate; the cookie
-    # carries "{admin_id}|{impersonated_user_id}" and only takes effect when the
-    # JWT-authenticated user is that admin.
-    impersonate_cookie = request.cookies.get("admin_impersonate")
+    # Check for admin impersonation. Cookie is HMAC-signed (see
+    # sign_impersonation_cookie); a valid signature plus the JWT-authenticated
+    # user being the named admin are both required.
+    impersonate_cookie = request.cookies.get(IMPERSONATE_COOKIE_NAME)
     if impersonate_cookie and user.is_admin:
-        try:
-            admin_id, impersonated_user_id = impersonate_cookie.split("|")
+        verified = verify_impersonation_cookie(impersonate_cookie)
+        if verified is None:
+            logger.warning("Rejected impersonation cookie: bad signature or format")
+        else:
+            admin_id, impersonated_user_id = verified
             if admin_id == user.id:
-                impersonated_user = auth_service.get_user_by_id(impersonated_user_id)
-                logger.info(
-                    "Admin '%s' impersonating user '%s'",
-                    user.username, impersonated_user.username
-                )
-                return impersonated_user
-        except (ValueError, UserNotFoundError) as e:
-            logger.warning("Invalid impersonation cookie: %s", e)
+                try:
+                    impersonated_user = auth_service.get_user_by_id(impersonated_user_id)
+                except UserNotFoundError:
+                    logger.warning(
+                        "Impersonation cookie names unknown user '%s'",
+                        impersonated_user_id,
+                    )
+                else:
+                    logger.info(
+                        "Admin '%s' impersonating user '%s'",
+                        user.username, impersonated_user.username
+                    )
+                    return impersonated_user
 
     return user
 

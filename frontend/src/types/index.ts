@@ -437,6 +437,8 @@ export interface EditorState {
   isDragging: boolean;
   showGrid: boolean;
   snapEnabled: boolean;
+  /** When true, the canvas substitutes {var} placeholders with fixed sample values. */
+  samplePreview: boolean;
   zoom: number;
   // Multi-page support
   currentPage: number;

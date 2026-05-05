@@ -9,13 +9,17 @@ import React from 'react';
 import { Widget } from '@/types';
 import { resolveFontFamily, mapJustify } from './utils';
 import { normalizeOrientation, isVerticalOrientation } from './textUtils';
+import { useEditorStore } from '@/stores/editorStore';
+import { replaceTokensForPreview } from '@/lib/tokens';
 
 interface LinkWidgetProps {
   widget: Widget;
 }
 
 const LinkWidget: React.FC<LinkWidgetProps> = ({ widget }) => {
-  const linkContent = widget.content || 'Internal Link';
+  const samplePreview = useEditorStore((s) => s.samplePreview);
+  const rawContent = widget.content || 'Internal Link';
+  const linkContent = samplePreview ? replaceTokensForPreview(rawContent) : rawContent;
   const linkStyling = widget.styling || {};
   const linkFontSize = linkStyling.size || 12;
   const linkFontFamily = resolveFontFamily(linkStyling.font);

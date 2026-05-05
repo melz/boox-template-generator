@@ -10,6 +10,8 @@ import { Widget } from '@/types';
 import { mapJustify } from './utils';
 import { getFontCSS } from '@/lib/fonts';
 import { normalizeOrientation, isVerticalOrientation } from './textUtils';
+import { useEditorStore } from '@/stores/editorStore';
+import { replaceTokensForPreview } from '@/lib/tokens';
 
 interface TextWidgetProps {
   widget: Widget;
@@ -19,6 +21,10 @@ const TextWidget: React.FC<TextWidgetProps> = ({ widget }) => {
   const fontCSS = getFontCSS(widget.styling?.font);
   const orientation = normalizeOrientation(widget.properties?.orientation);
   const vertical = isVerticalOrientation(orientation);
+  const samplePreview = useEditorStore((s) => s.samplePreview);
+
+  const rawContent = widget.content || 'Text Block';
+  const displayContent = samplePreview ? replaceTokensForPreview(rawContent) : rawContent;
 
   return (
     <div
@@ -37,7 +43,7 @@ const TextWidget: React.FC<TextWidgetProps> = ({ widget }) => {
         overflow: 'hidden'
       }}
     >
-      {widget.content || 'Text Block'}
+      {displayContent}
     </div>
   );
 };

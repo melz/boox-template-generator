@@ -1,10 +1,13 @@
 import { useState, useEffect } from 'react';
+import { Smartphone } from 'lucide-react';
 import type { CloneProjectRequestPayload } from '@/types';
 
 interface CloneDialogProps {
   isOpen: boolean;
   initialName: string;
   initialDescription: string;
+  /** Device profile the source project was designed for (e.g. "boox-tab-mini-c"). */
+  sourceDeviceProfile?: string;
   error: string | null;
   isSubmitting: boolean;
   onConfirm: (payload: CloneProjectRequestPayload) => Promise<void>;
@@ -15,6 +18,7 @@ const CloneDialog = ({
   isOpen,
   initialName,
   initialDescription,
+  sourceDeviceProfile,
   error,
   isSubmitting,
   onConfirm,
@@ -51,6 +55,19 @@ const CloneDialog = ({
             Give your copy a memorable name. You can adjust sharing settings later from the project page.
           </p>
         </div>
+
+        {sourceDeviceProfile && (
+          <div className="flex items-start gap-2 rounded-md bg-blue-50 border border-blue-200 px-3 py-2 text-sm">
+            <Smartphone size={16} className="text-blue-700 mt-0.5 shrink-0" />
+            <div className="text-blue-900">
+              Designed for <code className="font-mono bg-blue-100 px-1 rounded">{sourceDeviceProfile}</code>.
+              {' '}
+              <span className="text-blue-800">
+                If your device differs, change the device profile in the cloned project's settings and confirm the rescale prompt — widgets will be repositioned proportionally.
+              </span>
+            </div>
+          </div>
+        )}
 
         <div className="space-y-1">
           <label htmlFor="clone-name" className="block text-sm font-medium text-eink-black">

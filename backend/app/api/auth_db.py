@@ -5,7 +5,7 @@ Replaces file-based auth with SQLAlchemy database auth.
 """
 
 import logging
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.orm import Session
 
 from ..config import settings
@@ -20,7 +20,7 @@ from ..db.auth_service import (
 )
 from ..db.jwt_service import get_jwt_service
 from ..db.models import User
-from ..auth import EmailService
+from ..services.email_service import EmailService
 from ..limiter import limiter
 import os
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
@@ -70,6 +70,7 @@ def _to_user_response(user: User) -> UserResponse:
 @limiter.limit(settings.REGISTER_RATE_LIMIT)
 async def register(
     request: Request,
+    response: Response,
     payload: UserCreate,
     auth_service: DBAuthService = Depends(get_auth_service)
 ) -> UserResponse:
@@ -92,6 +93,7 @@ async def register(
 @limiter.limit(settings.LOGIN_RATE_LIMIT)
 async def login(
     request: Request,
+    response: Response,
     payload: UserLogin,
     auth_service: DBAuthService = Depends(get_auth_service)
 ) -> Token:
@@ -136,6 +138,7 @@ async def me(request: Request, current_user: User = Depends(get_current_user)) -
 @limiter.limit(settings.PASSWORD_RESET_REQUEST_RATE_LIMIT)
 async def request_password_reset(
     request: Request,
+    response: Response,
     payload: PasswordResetRequest,
     reset_service: DBPasswordResetService = Depends(get_password_reset_service)
 ) -> MessageResponse:
@@ -180,6 +183,7 @@ async def request_password_reset(
 @limiter.limit(settings.PASSWORD_RESET_CONFIRM_RATE_LIMIT)
 async def confirm_password_reset(
     request: Request,
+    response: Response,
     payload: PasswordResetConfirmRequest,
     reset_service: DBPasswordResetService = Depends(get_password_reset_service)
 ) -> MessageResponse:

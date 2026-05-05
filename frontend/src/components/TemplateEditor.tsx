@@ -5,7 +5,7 @@
  * Follows CLAUDE.md coding standards - no dummy implementations.
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useParams } from 'react-router-dom';
 
 import { useEditorStore } from '@/stores/editorStore';
@@ -87,6 +87,14 @@ const TemplateEditor: React.FC<TemplateEditorProps> = ({
   const [compiledYaml, setCompiledYaml] = useState<string | null>(null);
   const [showCompile, setShowCompile] = useState(false);
 
+  // Last yamlContent string we serialized from the store. Used to break the
+  // store↔parent feedback loop: when MasterEditor's yamlContent prop comes
+  // back as a value we just emitted ourselves, skip re-parsing (and the
+  // history-clearing setCurrentTemplate that comes with it). Without this,
+  // every store edit would round-trip through MasterEditor and wipe the
+  // undo/redo stack.
+  const lastEmittedYamlRef = useRef<string | null>(null);
+
   useEffect(() => {
     loadProfiles();
     // Ensure fresh state when creating a new template or switching templates
@@ -95,10 +103,17 @@ const TemplateEditor: React.FC<TemplateEditorProps> = ({
       resetEditor();
       loadTemplate(templateId);
     } else if (yamlContent) {
-      // Project-based mode: load from yamlContent prop
+      // Project-based mode: load from yamlContent prop. Skip when the prop is
+      // just our own output bouncing back; otherwise this would re-call
+      // setCurrentTemplate, which clears the editor's undo history.
+      if (yamlContent === lastEmittedYamlRef.current) {
+        setLoading(false);
+        return;
+      }
       try {
         const template = JSON.parse(yamlContent) as Template;
         setCurrentTemplate(template);
+        lastEmittedYamlRef.current = yamlContent;
         setLoading(false);
       } catch (err) {
         setError('Invalid template YAML');
@@ -116,6 +131,9 @@ const TemplateEditor: React.FC<TemplateEditorProps> = ({
   useEffect(() => {
     if (onTemplateChange && currentTemplate) {
       const yamlString = JSON.stringify(currentTemplate, null, 2);
+      // Stash the string before notifying the parent so the parent's prop
+      // update can be recognized as our own echo and ignored above.
+      lastEmittedYamlRef.current = yamlString;
       onTemplateChange(currentTemplate, yamlString);
     }
   }, [currentTemplate, onTemplateChange]);

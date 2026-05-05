@@ -11,7 +11,7 @@ import logging
 import re
 import math
 from datetime import date, timedelta, datetime
-from typing import Dict, List, Any, Iterator, Tuple, Optional
+from typing import Dict, List, Any, Iterator, Set, Tuple, Optional
 from calendar import monthrange
 
 from ..core.project_schema import (
@@ -317,26 +317,29 @@ class PlanEnumerator:
                 else:
                     context.custom[counter_name] = counter_value
 
-                # Automatic navigation: Add _prev and _next variants for sequential navigation
-                # Following CLAUDE.md Rule #3: Explicit behavior - only add if within bounds
-                if not is_first:
+                # Automatic navigation: Add _prev and _next variants for sequential navigation.
+                # We always set the keys (using "" at section boundaries) so counter
+                # navigation matches the date-variable convention. token_processor.py
+                # treats "" the same as "missing" — links pointing at "destination:" are
+                # skipped — but a present-with-empty key is easier to inspect and means
+                # `{counter}_prev not in context` semantics never disagree across var types.
+                if is_first:
+                    context.custom[f'{counter_name}_prev'] = ''
+                else:
                     prev_value = counter_value - step
-                    # Store as same type (int or float)
                     if prev_value == int(prev_value):
                         context.custom[f'{counter_name}_prev'] = int(prev_value)
                     else:
                         context.custom[f'{counter_name}_prev'] = prev_value
-                # If at start, key doesn't exist - token replacement will return ""
 
-                # For _next, use is_last flag to determine if we're at the end
-                if not is_last:
+                if is_last:
+                    context.custom[f'{counter_name}_next'] = ''
+                else:
                     next_value = counter_value + step
-                    # Store as same type (int or float)
                     if next_value == int(next_value):
                         context.custom[f'{counter_name}_next'] = int(next_value)
                     else:
                         context.custom[f'{counter_name}_next'] = next_value
-                # If at end, key doesn't exist - token replacement will return ""
 
             except (ValueError, TypeError, KeyError) as e:
                 # Skip invalid counters, log warning
@@ -385,6 +388,10 @@ class BindingResolver:
 
     def __init__(self, destination_registry: DestinationRegistry):
         self.destination_registry = destination_registry
+        # Names of `{var}` / `@var` tokens that appeared in widget content but
+        # weren't bound by any context. Collected so the compile step can warn
+        # users that e.g. they typed `{date_lng}` instead of `{date_long}`.
+        self.unresolved_token_names: Set[str] = set()
 
     def resolve_widget_bindings(self, widget: Dict[str, Any], context: BindingContext) -> Dict[str, Any]:
         """Resolve bindings in a widget using context."""
@@ -450,8 +457,13 @@ class BindingResolver:
                 var_name = m.group(1)
                 format_spec = m.group(2)  # May be None if no :format part
 
+                if var_name not in context_dict:
+                    self.unresolved_token_names.add(var_name)
+                    return m.group(0)  # Return original token if variable not found
+
                 value = context_dict.get(var_name)
                 if value is None:
+                    self.unresolved_token_names.add(var_name)
                     return m.group(0)  # Return original token if variable not found
 
                 # Apply format specifier if provided
@@ -489,8 +501,13 @@ class BindingResolver:
                 var_name = m.group(1)
                 format_spec = m.group(2)  # May be None if no :format part
 
+                if var_name not in context_dict:
+                    self.unresolved_token_names.add(var_name)
+                    return m.group(0)  # Return original token if variable not found
+
                 value = context_dict.get(var_name)
                 if value is None:
+                    self.unresolved_token_names.add(var_name)
                     return m.group(0)  # Return original token if variable not found
 
                 # Apply format specifier if provided
@@ -1064,11 +1081,28 @@ class CompilationService:
 
         logger.info(f"Compilation complete: {compilation_stats['total_widgets']} widgets across {compilation_stats['total_pages']} pages")
 
+        # Surface any token references that didn't resolve. Common cause: typos
+        # like {date_lng} that survived compilation as literal `{date_lng}` and
+        # would otherwise become the empty string at render time.
+        warnings: List[str] = []
+        if binding_resolver.unresolved_token_names:
+            unresolved = sorted(binding_resolver.unresolved_token_names)
+            warnings.append(
+                "Unresolved variable references in widget content: "
+                + ", ".join(f"{{{name}}}" for name in unresolved)
+                + ". These show as the literal placeholder in compiled output and "
+                "render as empty in the final PDF. Check for typos against the "
+                "section's counters/context, the auto-nav vars (date_prev/_next, "
+                "month_prev/_next, week_prev/_next, year_prev/_next), or built-ins."
+            )
+            logger.warning("Unresolved tokens: %s", unresolved)
+
         return CompilationResult(
             project_id=project.id,
             template=final_template,
             compilation_stats=compilation_stats,
-            generated_at=datetime.now().isoformat()
+            generated_at=datetime.now().isoformat(),
+            warnings=warnings,
         )
 
     def _instantiate_master(self, master: Master, context: BindingContext,
@@ -1493,6 +1527,7 @@ class CompilationService:
         widgets = []
         props = widget_dict.get("properties", {})
         position = widget_dict.get("position", {})
+        base_styling = widget_dict.get("styling", {}) or {}
 
         month_str = props.get("month", f"{context.year or 2026}-{context.month or 1:02d}")
         if isinstance(month_str, str) and month_str.startswith("@"):

@@ -30,7 +30,7 @@ const CanvasWidget: React.FC<CanvasWidgetProps> = ({
   onContextMenu,
   readOnly = false
 }) => {
-  const { updateWidget, selectedIds, currentTemplate, snapEnabled: globalSnapEnabled } = useEditorStore() as any;
+  const { updateWidget, selectedIds, currentTemplate, snapEnabled: globalSnapEnabled, setIsDragging } = useEditorStore() as any;
   const snapEnabled = globalSnapEnabled && (currentTemplate?.canvas?.snap_enabled !== false);
   const gridSize = currentTemplate?.canvas?.grid_size || 10;
 
@@ -44,6 +44,10 @@ const CanvasWidget: React.FC<CanvasWidgetProps> = ({
     type: 'WIDGET',
     item: () => {
       if (readOnly) return null;
+      // Mark the drag in the editor store so the undo/redo subscriber treats
+      // the whole drag (and any drop-time updateWidget calls — single OR
+      // multi-widget) as one history entry instead of one per pixel.
+      setIsDragging(true);
 
       // If this widget is part of a multi-selection, include all selected widgets
       if (selectedIds && selectedIds.length > 1 && selectedIds.includes(widget.id)) {
@@ -63,6 +67,14 @@ const CanvasWidget: React.FC<CanvasWidgetProps> = ({
         widget,
         isNew: false
       };
+    },
+    end: () => {
+      // Drop-time updateWidget calls have already happened by the time `end`
+      // fires; clearing here closes the drag window. The subscriber's
+      // post-drag check (currentTemplate already changed during drag, isDragging
+      // now false) is intentionally a no-op — the drag-start snapshot is the
+      // history entry that represents this drag.
+      setIsDragging(false);
     },
     canDrag: !readOnly,
     collect: (monitor) => ({
@@ -95,6 +107,9 @@ const CanvasWidget: React.FC<CanvasWidgetProps> = ({
       mouseX: e.clientX,
       mouseY: e.clientY,
     };
+    // Resize is a per-pixel mousemove loop — collapse it into one history
+    // entry by gating updateWidget calls behind the same drag flag.
+    setIsDragging(true);
     // Add listeners
     window.addEventListener('mousemove', onMouseMove as any);
     window.addEventListener('mouseup', onMouseUp as any, { once: true });
@@ -146,6 +161,7 @@ const CanvasWidget: React.FC<CanvasWidgetProps> = ({
 
   const onMouseUp = (_e: MouseEvent) => {
     resizeEdgeRef.current = null;
+    setIsDragging(false);
     window.removeEventListener('mousemove', onMouseMove as any);
   };
 

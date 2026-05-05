@@ -8,7 +8,7 @@ Follows CLAUDE.md coding standards - no dummy implementations.
 import json
 import logging
 from typing import Any, Dict, List, Optional
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response, status
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -91,6 +91,7 @@ def _job_to_response(job: PDFJob) -> PDFJobResponse:
 @limiter.limit(settings.PDF_GENERATE_RATE_LIMIT)
 async def create_pdf_job(
     request: Request,
+    response: Response,
     payload: PDFJobCreateRequest,
     background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),

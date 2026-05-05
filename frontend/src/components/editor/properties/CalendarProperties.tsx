@@ -50,10 +50,23 @@ const CalendarProperties: React.FC<CalendarPropertiesProps> = ({ widget, onUpdat
     { value: 'vertical', label: 'Vertical (Rows)' }
   ];
 
+  const weekdayLabelStyleOptions = [
+    { value: 'short', label: 'Short (Mon, Tue)' },
+    { value: 'narrow', label: 'Narrow (M, T)' },
+    { value: 'full', label: 'Full (Monday, Tuesday)' },
+  ];
+
+  const monthNameFormatOptions = [
+    { value: 'long', label: 'Long (January)' },
+    { value: 'short', label: 'Short (Jan)' },
+  ];
+
   const calendarType = properties.calendar_type || 'monthly';
   const linkStrategy = properties.link_strategy || 'named_destinations';
   const showLinkSettings = linkStrategy === 'sequential_pages';
   const showLinkTemplate = linkStrategy === 'named_destinations';
+  const showTimeGridSection = calendarType === 'weekly' || calendarType === 'custom_range';
+  const timeGridEnabled = properties.show_time_grid === true;
 
   return (
     <div className="space-y-6">
@@ -192,6 +205,122 @@ const CalendarProperties: React.FC<CalendarPropertiesProps> = ({ widget, onUpdat
           </div>
         </div>
       </div>
+
+      {/* Layout & Style — formerly only reachable via raw YAML editing. */}
+      <div>
+        <h4 className="font-medium mb-3">Layout & Style</h4>
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <SelectInput
+              label="Weekday Labels"
+              value={properties.weekday_label_style || 'short'}
+              onChange={(value) => updateProperty('weekday_label_style', value)}
+              options={weekdayLabelStyleOptions}
+            />
+            <SelectInput
+              label="Month Name"
+              value={properties.month_name_format || 'long'}
+              onChange={(value) => updateProperty('month_name_format', value)}
+              options={monthNameFormatOptions}
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <NumberInput
+              label="Cell Padding"
+              value={properties.cell_padding ?? 4}
+              onChange={(value) => updateProperty('cell_padding', value)}
+              min={0}
+              max={20}
+              unit="pt"
+              helpText="Inner padding for date cells"
+            />
+            <CheckboxInput
+              label="Highlight Today"
+              checked={properties.highlight_today === true}
+              onChange={(checked) => updateProperty('highlight_today', checked)}
+              helpText="Tint the cell matching the current render date"
+            />
+          </div>
+
+          {calendarType === 'monthly' && (
+            <CheckboxInput
+              label="Show Trailing Days"
+              checked={properties.show_trailing_days === true}
+              onChange={(checked) => updateProperty('show_trailing_days', checked)}
+              helpText="Fill out the first/last week with prev/next month dates"
+            />
+          )}
+        </div>
+      </div>
+
+      {/* Time Grid — only meaningful for weekly / custom_range layouts.
+          Backend renderer reads show_time_grid + show_time_gutter +
+          time_{start,end}_hour + time_slot_minutes + time_label_interval. */}
+      {showTimeGridSection && (
+        <div>
+          <h4 className="font-medium mb-3">Time Grid</h4>
+          <div className="space-y-3">
+            <CheckboxInput
+              label="Show Time Grid"
+              checked={timeGridEnabled}
+              onChange={(checked) => updateProperty('show_time_grid', checked)}
+              helpText="Draw horizontal hour lines across day cells"
+            />
+
+            {timeGridEnabled && (
+              <>
+                <CheckboxInput
+                  label="Show Time Gutter"
+                  checked={properties.show_time_gutter === true}
+                  onChange={(checked) => updateProperty('show_time_gutter', checked)}
+                  helpText="Left column with hour labels"
+                />
+
+                <div className="grid grid-cols-2 gap-3">
+                  <NumberInput
+                    label="Start Hour"
+                    value={properties.time_start_hour ?? 8}
+                    onChange={(value) => updateProperty('time_start_hour', value)}
+                    min={0}
+                    max={23}
+                    helpText="0–23 (24-hour clock)"
+                  />
+                  <NumberInput
+                    label="End Hour"
+                    value={properties.time_end_hour ?? 20}
+                    onChange={(value) => updateProperty('time_end_hour', value)}
+                    min={1}
+                    max={24}
+                    helpText="Must be after Start Hour"
+                  />
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <NumberInput
+                    label="Slot Minutes"
+                    value={properties.time_slot_minutes ?? 60}
+                    onChange={(value) => updateProperty('time_slot_minutes', value)}
+                    min={5}
+                    max={240}
+                    unit="min"
+                    helpText="Resolution of one slot (5–240)"
+                  />
+                  <NumberInput
+                    label="Label Interval"
+                    value={properties.time_label_interval ?? 60}
+                    onChange={(value) => updateProperty('time_label_interval', value)}
+                    min={properties.time_slot_minutes ?? 5}
+                    max={720}
+                    unit="min"
+                    helpText="Minutes between visible labels"
+                  />
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Navigation */}
       <div>

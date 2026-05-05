@@ -9,6 +9,26 @@ import { create } from 'zustand';
 import { devtools } from 'zustand/middleware';
 import { Widget, DeviceProfile, Template, EditorState } from '@/types';
 
+// Maximum entries kept in each undo/redo stack. Templates can be sizable so
+// 50 strikes a balance between memory and useful history depth.
+const HISTORY_LIMIT = 50;
+
+// When the user does a burst of fast edits (e.g. typing in a text widget's
+// content field — every keystroke is one updateWidget call), we collapse all
+// changes within this window into a single undo step. The first edit in the
+// burst captures the pre-burst state; subsequent edits update `currentTemplate`
+// without pushing additional history.
+const HISTORY_COALESCE_MS = 500;
+
+// Module-level flag the auto-snapshot subscriber checks. When undo/redo or a
+// fresh template load mutates state, we don't want to record those changes as
+// new history entries.
+let suppressHistorySnapshot = false;
+
+// Timestamp of the most recent history push. Used by the coalescing window
+// above to decide whether to fold a new edit into the previous undo step.
+let lastSnapshotAt = 0;
+
 // Calculate canvas dimensions from device profile.
 // Matches backend logic: converts screen pixels to points and respects orientation.
 // Following CLAUDE.md: No fallbacks - throws error if profile is invalid.
@@ -79,6 +99,14 @@ export interface DragInfo {
 }
 
 interface EditorStore extends EditorState {
+  // Undo/redo history. `_historyPast` holds snapshots of previous templates
+  // (oldest first); `_historyFuture` holds redo snapshots. Both are capped at
+  // HISTORY_LIMIT so memory doesn't grow unbounded across long sessions.
+  _historyPast: Template[];
+  _historyFuture: Template[];
+  undo: () => void;
+  redo: () => void;
+
   // Actions
   setSelectedWidget: (widget: Widget | null) => void;
   toggleSelectWidget: (widgetId: string) => void;
@@ -90,6 +118,7 @@ interface EditorStore extends EditorState {
   dragInfo: DragInfo | null;
   setShowGrid: (showGrid: boolean) => void;
   setSnapEnabled: (snapEnabled: boolean) => void;
+  setSamplePreview: (samplePreview: boolean) => void;
   setGridSize: (gridSize: number) => void;
   setZoom: (zoom: number) => void;
   // Wheel behavior
@@ -195,6 +224,9 @@ export const useEditorStore = create<EditorStore>()(
       dragInfo: null,
       showGrid: true,
       snapEnabled: true,
+      samplePreview: false,
+      _historyPast: [],
+      _historyFuture: [],
       zoom: 1,
       wheelMode: 'scroll',
       canvasContainerSize: null,
@@ -205,6 +237,49 @@ export const useEditorStore = create<EditorStore>()(
       showRightPanel: true,
       currentPage: 1,
       totalPages: 1,
+
+      // Undo / redo. The auto-snapshot subscriber installed below pushes the
+      // pre-edit template onto _historyPast after every mutating action. undo
+      // pops the latest snapshot (the state before the most recent edit) and
+      // moves the current template onto _historyFuture; redo is the inverse.
+      undo: () => {
+        const state = get();
+        if (state._historyPast.length === 0) return;
+        const prevTemplate = state._historyPast[state._historyPast.length - 1];
+        const newPast = state._historyPast.slice(0, -1);
+        const newFuture = state.currentTemplate
+          ? [state.currentTemplate, ...state._historyFuture]
+          : state._historyFuture;
+        suppressHistorySnapshot = true;
+        set({
+          currentTemplate: prevTemplate,
+          _historyPast: newPast,
+          _historyFuture: newFuture,
+          // Clear selection — selected widget IDs may not exist in the
+          // restored template.
+          selectedWidget: null,
+          selectedIds: [],
+        });
+        suppressHistorySnapshot = false;
+      },
+      redo: () => {
+        const state = get();
+        if (state._historyFuture.length === 0) return;
+        const nextTemplate = state._historyFuture[0];
+        const newFuture = state._historyFuture.slice(1);
+        const newPast = state.currentTemplate
+          ? [...state._historyPast, state.currentTemplate]
+          : state._historyPast;
+        suppressHistorySnapshot = true;
+        set({
+          currentTemplate: nextTemplate,
+          _historyPast: newPast,
+          _historyFuture: newFuture,
+          selectedWidget: null,
+          selectedIds: [],
+        });
+        suppressHistorySnapshot = false;
+      },
 
       // Basic setters
       setSelectedWidget: (widget) => set({ selectedWidget: widget, selectedIds: widget ? [widget.id] : [] }),
@@ -251,7 +326,13 @@ export const useEditorStore = create<EditorStore>()(
           }
         }
       },
-      setCurrentTemplate: (template) => set({ currentTemplate: template }),
+      setCurrentTemplate: (template) => {
+        // Loading a new template is not an undoable user edit; reset history
+        // so undo doesn't pop you back into a different master.
+        suppressHistorySnapshot = true;
+        set({ currentTemplate: template, _historyPast: [], _historyFuture: [] });
+        suppressHistorySnapshot = false;
+      },
       setIsDragging: (isDragging) => set({ isDragging }),
       setDragInfo: (dragInfo) => set({ dragInfo }),
       setShowGrid: (showGrid) => set({ showGrid }),
@@ -259,6 +340,7 @@ export const useEditorStore = create<EditorStore>()(
       setShowPagesPanel: (show) => set({ showPagesPanel: show }),
       setShowRightPanel: (show) => set({ showRightPanel: show }),
       setSnapEnabled: (snapEnabled) => set({ snapEnabled }),
+      setSamplePreview: (samplePreview) => set({ samplePreview }),
       setGridSize: (gridSize) => {
         const { currentTemplate } = get();
 
@@ -672,6 +754,7 @@ export const useEditorStore = create<EditorStore>()(
       },
 
       resetEditor: () => {
+        suppressHistorySnapshot = true;
         set({
           selectedWidget: null,
           selectedIds: [],
@@ -680,6 +763,9 @@ export const useEditorStore = create<EditorStore>()(
           dragInfo: null,
           showGrid: true,
           snapEnabled: true,
+          samplePreview: false,
+          _historyPast: [],
+          _historyFuture: [],
           zoom: 1,
           showWidgetPalette: true,
           showPagesPanel: true,
@@ -687,6 +773,7 @@ export const useEditorStore = create<EditorStore>()(
           currentPage: 1,
           totalPages: 1
         });
+        suppressHistorySnapshot = false;
       },
 
       // Masters
@@ -919,3 +1006,67 @@ export const useEditorStore = create<EditorStore>()(
     }
   )
 );
+
+// Auto-snapshot subscriber.
+//
+// Records the previous template into `_historyPast` whenever the template
+// changes outside of:
+//   - undo/redo (suppressHistorySnapshot=true)
+//   - explicit template loads via setCurrentTemplate / resetEditor (also
+//     suppressed, and they also clear the history)
+//   - mid-drag updates (continuous-motion edits collapse into one history
+//     step taken at drag start)
+//
+// We capture prevState ourselves because Zustand's vanilla subscribe API
+// doesn't pass it. This is fine: the subscriber runs synchronously after each
+// set(), so prevState always lags the new state by exactly one event.
+let _prevHistoryState = useEditorStore.getState();
+useEditorStore.subscribe((state) => {
+  const prev = _prevHistoryState;
+  _prevHistoryState = state;
+  if (suppressHistorySnapshot) return;
+
+  // Drag started: capture the pre-drag template once.
+  if (state.isDragging && !prev.isDragging) {
+    if (prev.currentTemplate) {
+      const newPast = [...state._historyPast, prev.currentTemplate];
+      while (newPast.length > HISTORY_LIMIT) newPast.shift();
+      suppressHistorySnapshot = true;
+      useEditorStore.setState({ _historyPast: newPast, _historyFuture: [] });
+      suppressHistorySnapshot = false;
+      lastSnapshotAt = Date.now();
+    }
+    return;
+  }
+
+  // Skip everything during a drag — the start-of-drag snapshot is enough.
+  if (state.isDragging) return;
+
+  // Discrete (non-drag) template change: snapshot the prior state, unless we
+  // already snapshotted recently (typing-burst coalescing).
+  if (state.currentTemplate !== prev.currentTemplate && prev.currentTemplate) {
+    const now = Date.now();
+    const isBurst =
+      state._historyPast.length > 0 && now - lastSnapshotAt < HISTORY_COALESCE_MS;
+
+    if (isBurst) {
+      // Inside a burst: keep the existing past snapshot (which captures the
+      // pre-burst state) but invalidate redo — subsequent edits diverge from
+      // any future stack we held.
+      if (state._historyFuture.length > 0) {
+        suppressHistorySnapshot = true;
+        useEditorStore.setState({ _historyFuture: [] });
+        suppressHistorySnapshot = false;
+      }
+      lastSnapshotAt = now;
+      return;
+    }
+
+    const newPast = [...state._historyPast, prev.currentTemplate];
+    while (newPast.length > HISTORY_LIMIT) newPast.shift();
+    suppressHistorySnapshot = true;
+    useEditorStore.setState({ _historyPast: newPast, _historyFuture: [] });
+    suppressHistorySnapshot = false;
+    lastSnapshotAt = now;
+  }
+});

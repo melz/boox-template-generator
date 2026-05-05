@@ -120,6 +120,8 @@ def _generate_pdf_subprocess(
             )
             diagnostics["compile"]["completed_at"] = _now_iso()
             diagnostics["compile"]["stats"] = result.compilation_stats
+            if result.warnings:
+                diagnostics["compile"]["warnings"] = list(result.warnings)
 
             template_yaml = yaml.safe_dump(
                 convert_enums_for_serialization(result.template.model_dump()),

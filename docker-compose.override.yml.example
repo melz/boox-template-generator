@@ -1,0 +1,29 @@
+# docker-compose.override.yml.example
+#
+# Copy this file to `docker-compose.override.yml` and fill in deployment-
+# specific values. Compose merges the override on top of docker-compose.yml
+# automatically. The override is gitignored so your personal paths and
+# domain stay out of source control.
+#
+# Typical things to set here:
+#   * Real bind-mount paths (NAS share, SSD path, etc.)
+#   * Production password-reset URL
+#   * Real SMTP host
+#
+# Anything you can put in the main file's `environment:` list, you can
+# override here. The merged config wins.
+
+services:
+  backend:
+    volumes:
+      # Replace these with the actual paths on your host.
+      - /share/your-nas/eink/data:/app/backend/data
+      - /share/your-nas/eink/config/profiles:/app/config/profiles:ro
+    environment:
+      - EINK_PASSWORD_RESET_URL=https://your-domain.example.com/reset-password
+      - EINK_SMTP_HOST=smtp.your-provider.com
+      # Substitute these from a `.env` file alongside docker-compose.yml so
+      # the credentials don't end up in this override file either.
+      - EINK_SMTP_USERNAME=${EMAIL_FROM}
+      - EINK_SMTP_PASSWORD=${EMAIL_PASSWORD}
+      - EINK_SMTP_FROM=${EMAIL_FROM}

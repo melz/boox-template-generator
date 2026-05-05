@@ -12,7 +12,12 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..db import get_db
-from ..db.dependencies import get_current_admin_user
+from ..db.dependencies import (
+    IMPERSONATE_COOKIE_NAME,
+    get_current_admin_user,
+    sign_impersonation_cookie,
+    verify_impersonation_cookie,
+)
 from ..db.models import User
 from ..db.auth_service import DBAuthService
 from ..config import settings
@@ -199,24 +204,20 @@ def impersonate_user(
             detail=f"User not found: {body.user_id}"
         )
 
-    # Store impersonation in session (using cookies)
-    # Session format: admin_id|impersonated_user_id
-    session_value = f"{admin.id}|{target_user.id}"
+    # Store impersonation in an HMAC-signed cookie. Without the signature an
+    # XSS payload could mint one naming any user as the impersonation target.
+    session_value = sign_impersonation_cookie(admin.id, target_user.id)
 
-    # Set secure session cookie
     import logging
     logger = logging.getLogger(__name__)
 
-    logger.info(f"Setting impersonation cookie: {session_value}")
-
-    # Determine security requirements for cookie
     forwarded_proto = request.headers.get("x-forwarded-proto")
     scheme = forwarded_proto or request.url.scheme
     is_https = scheme.lower() == "https"
     should_use_secure = (not settings.DEBUG) and is_https
 
     response.set_cookie(
-        key="admin_impersonate",
+        key=IMPERSONATE_COOKIE_NAME,
         value=session_value,
         httponly=True,
         secure=should_use_secure,
@@ -225,12 +226,8 @@ def impersonate_user(
         max_age=3600 * 24  # 24 hours
     )
     logger.info(
-        "Cookie set (secure=%s, scheme=%s, debug=%s) for admin %s to impersonate %s",
-        should_use_secure,
-        scheme,
-        settings.DEBUG,
-        admin.username,
-        target_user.username
+        "Admin '%s' began impersonating '%s' (secure=%s, scheme=%s)",
+        admin.username, target_user.username, should_use_secure, scheme,
     )
 
     return {
@@ -258,20 +255,20 @@ def stop_impersonation(
     logger = logging.getLogger(__name__)
 
     # Get the impersonation cookie to find the admin
-    impersonate_cookie = request.cookies.get("admin_impersonate")
+    impersonate_cookie = request.cookies.get(IMPERSONATE_COOKIE_NAME)
     if not impersonate_cookie:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Not currently impersonating"
         )
 
-    try:
-        admin_id, impersonated_user_id = impersonate_cookie.split("|")
-    except ValueError:
+    verified = verify_impersonation_cookie(impersonate_cookie)
+    if verified is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid impersonation cookie"
         )
+    admin_id, impersonated_user_id = verified
 
     # Verify the admin exists
     admin = db.query(User).filter(User.id == admin_id).first()
@@ -282,9 +279,12 @@ def stop_impersonation(
         )
 
     # Clear session cookie - must match the same path and other params as when set
-    logger.info(f"Admin {admin.username} stopping impersonation of user {impersonated_user_id}")
+    logger.info(
+        "Admin '%s' stopping impersonation of user '%s'",
+        admin.username, impersonated_user_id,
+    )
     response.delete_cookie(
-        key="admin_impersonate",
+        key=IMPERSONATE_COOKIE_NAME,
         path="/"
     )
 
